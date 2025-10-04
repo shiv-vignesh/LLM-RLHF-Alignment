@@ -3,6 +3,8 @@ from src.modelling import create_model
 from src.trainer.train_reward_model import create_training_arguments, RewardModelTrainer
 from src.metrics import compute_metrics_for_pair
 
+import os
+
 def main():    
     model = create_model(model_kwargs, training_kwargs["lora_kwargs"])
     
@@ -31,6 +33,7 @@ def main():
     else:
         test_dataset = None
 
+    os.makedirs(training_kwargs["output_dir"], exist_ok=True)
     training_args = create_training_arguments(training_kwargs)
     
     trainer = RewardModelTrainer(
@@ -63,7 +66,7 @@ if __name__ == "__main__":
         },
         "output_dir":"tmp_trainer",
         "save_strategy":"steps",
-        "save_steps":500,
+        "save_steps":10,
         "logging_steps":50,
         "report_to":"tensorboard"
     }

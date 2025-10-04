@@ -1,3 +1,5 @@
+import os
+
 import torch
 from transformers.trainer import Trainer
 from transformers import TrainingArguments
@@ -10,8 +12,10 @@ def create_training_arguments(trainer_kwargs):
     training_args = TrainingArguments(
         output_dir=trainer_kwargs["output_dir"],
         save_strategy=trainer_kwargs["save_strategy"],
+        save_steps=trainer_kwargs["save_steps"],
         logging_steps=trainer_kwargs["logging_steps"],
-        report_to=trainer_kwargs["report_to"]
+        report_to=trainer_kwargs["report_to"],
+        overwrite_output_dir=True
     )
 
     return training_args
@@ -176,6 +180,17 @@ class RewardModelTrainer(Trainer):
             self.metrics.clear()
 
         return super().log(logs)
+
+    def _save_checkpoint(self, model, trial):
+        
+        output_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.state.global_step}")
+        os.makedirs(output_dir, exist_ok=True)  # ensures the directory exists
+        
+        torch.save(
+            model.state_dict(), f'{output_dir}/ckpt-model.pt'
+        )
+
+        return super()._save_checkpoint(model, trial)
     
     def get_state_dict(self):
         pass
