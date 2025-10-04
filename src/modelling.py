@@ -32,8 +32,6 @@ def create_model(model_kwargs:dict, training_kwargs:dict):
     else:
         device = torch.device("cpu")
 
-    model.to(device)
-
     if model_kwargs["peft_path"] is not None and os.path.exists(model_kwargs["peft_path"]):
         model = PeftModel.from_pretrained(model, model_kwargs["peft_path"])
         
@@ -42,6 +40,8 @@ def create_model(model_kwargs:dict, training_kwargs:dict):
     
     model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
     model.config.use_cache = False
+    
+    model.to(device)
     
     #TODO, load v_head state_dict from peft_path
     #TODO, enable gradient ckpting

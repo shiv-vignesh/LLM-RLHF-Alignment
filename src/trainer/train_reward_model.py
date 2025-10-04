@@ -1,8 +1,20 @@
 import torch
 from transformers.trainer import Trainer
+from transformers import TrainingArguments
 
 from src.utils.data_preprocessing import AnthrophicRLHFDataCollator
 from src.utils.utils import IGNORE_INDEX, PAD_TOKEN_ID
+
+def create_training_arguments(trainer_kwargs):
+
+    training_args = TrainingArguments(
+        output_dir=trainer_kwargs["output_dir"],
+        save_strategy=trainer_kwargs["save_strategy"],
+        logging_steps=trainer_kwargs["logging_steps"],
+        report_to=trainer_kwargs["report_to"]
+    )
+
+    return training_args
 
 class RewardModelTrainer(Trainer):
     
@@ -129,13 +141,33 @@ class RewardModelTrainer(Trainer):
         for k, v in outputs.items():
             self.metrics[k] = v.mean()
             
+        batch_idx = self.state.global_step % len(self.get_eval_dataloader())
+        
+        #TODO, fix data collateFn to return just prompts and not prompt + response ids.        
+        # if batch_idx % 100 == 0:
+        #     # Example: generate text from input_ids
+        #     generated_ids = model.generate(
+        #         inputs["chosen_input_ids"],
+        #         attention_mask=inputs["chosen_attention_mask"],
+        #         max_new_tokens=50
+        #     )
+        #     # Decode and compute generation metrics
+        #     # Example using a simple placeholder function
+        #     generated_texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        #     reference_texts = self.tokenizer.batch_decode(inputs["chosen_labels"], skip_special_tokens=True)
+        #     # Compute your custom metric function
+        #     gen_metrics = compute_generation_metrics(generated_texts, reference_texts)
+        #     # Store generation metrics
+        #     for k, v in gen_metrics.items():
+        #         self.metrics[f"gen_{k}"] = v
+
         logits = tuple(v for k, v in outputs.items() if k in ["accepts_end_token_value", "rejects_end_token_value"])
         if prediction_loss_only:
             return (loss, None, None)
         
         logits = torch.stack(logits, dim=1)
         labels = torch.zeros(logits.shape[0]).to(logits.device)
-        return loss, logits, labels         
+        return loss, logits, labels
     
     def log(self, logs, start_time = None):
         if len(self.metrics) > 0:
