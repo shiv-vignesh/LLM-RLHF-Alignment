@@ -1,11 +1,16 @@
 import os
-
+import logging
 import torch
-from transformers.trainer import Trainer
+from transformers.trainer import Trainer, PreTrainedModel
 from transformers import TrainingArguments
+from transformers.modeling_utils import unwrap_model
+
+from peft import get_peft_model, get_peft_model_state_dict
 
 from src.utils.data_preprocessing import AnthrophicRLHFDataCollator
-from src.utils.utils import IGNORE_INDEX, PAD_TOKEN_ID
+from src.utils.utils import IGNORE_INDEX, WEIGHTS_NAME, TRAINING_ARGS_NAME
+
+logger = logging.getLogger(__name__)
 
 def create_training_arguments(trainer_kwargs):
 
@@ -15,7 +20,10 @@ def create_training_arguments(trainer_kwargs):
         save_steps=trainer_kwargs["save_steps"],
         logging_steps=trainer_kwargs["logging_steps"],
         report_to=trainer_kwargs["report_to"],
-        overwrite_output_dir=True
+        overwrite_output_dir=True,
+        eval_strategy=trainer_kwargs["evaluation_strategy"],
+        eval_steps=trainer_kwargs["eval_steps"],
+        num_train_epochs=trainer_kwargs["epochs"]
     )
 
     return training_args
@@ -146,26 +154,8 @@ class RewardModelTrainer(Trainer):
             self.metrics[k] = v.mean()
             
         batch_idx = self.state.global_step % len(self.get_eval_dataloader())
-        
-        #TODO, fix data collateFn to return just prompts and not prompt + response ids.        
-        # if batch_idx % 100 == 0:
-        #     # Example: generate text from input_ids
-        #     generated_ids = model.generate(
-        #         inputs["chosen_input_ids"],
-        #         attention_mask=inputs["chosen_attention_mask"],
-        #         max_new_tokens=50
-        #     )
-        #     # Decode and compute generation metrics
-        #     # Example using a simple placeholder function
-        #     generated_texts = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-        #     reference_texts = self.tokenizer.batch_decode(inputs["chosen_labels"], skip_special_tokens=True)
-        #     # Compute your custom metric function
-        #     gen_metrics = compute_generation_metrics(generated_texts, reference_texts)
-        #     # Store generation metrics
-        #     for k, v in gen_metrics.items():
-        #         self.metrics[f"gen_{k}"] = v
 
-        logits = tuple(v for k, v in outputs.items() if k in ["accepts_end_token_value", "rejects_end_token_value"])
+        logits = tuple(v for k, v in outputs.items() if k in ["chosen_end_token_value", "reject_end_token_value"])
         if prediction_loss_only:
             return (loss, None, None)
         
@@ -181,25 +171,53 @@ class RewardModelTrainer(Trainer):
 
         return super().log(logs)
 
-    def _save_checkpoint(self, model, trial):
-        
-        output_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.state.global_step}")
-        os.makedirs(output_dir, exist_ok=True)  # ensures the directory exists
-        
-        torch.save(
-            model.state_dict(), f'{output_dir}/ckpt-model.pt'
-        )
-
-        return super()._save_checkpoint(model, trial)
-    
-    def get_state_dict(self):
-        pass
-    
-    def _save(self, output_dir = None, state_dict=None):
+    def _save(self, output_dir=None, state_dict=None):
         """
-        call get_state_dict()
+        Custom save method that supports PEFT (LoRA) + value head (v_head).
+        This ensures you can later reload with `from_pretrained()` or resume training.
         """
-        pass
-    
+        output_dir = output_dir or self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving model checkpoint to {output_dir}")
 
-    
+        # Collect base state dict
+        if state_dict is None:
+            if isinstance(self.model, PreTrainedModel):
+                state_dict = self.model.state_dict()
+            else:
+                state_dict = unwrap_model(self.model).state_dict()
+
+        if not isinstance(self.model, PreTrainedModel):
+            # PEFT model inside ValueHead
+            peft_model = self.model.pretrained_model  
+
+            # ✅ Extract LoRA adapter weights directly from PEFT wrapper
+            adapter_state_dict = get_peft_model_state_dict(peft_model)
+
+            # Add value head
+            if hasattr(self.model, "v_head"):
+                v_head_state_dict = self.model.v_head.state_dict()
+                for k, v in v_head_state_dict.items():
+                    adapter_state_dict[f"v_head.{k}"] = v
+
+            torch.save(adapter_state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+
+            # Save PEFT config
+            try:
+                peft_model.peft_config.save_pretrained(output_dir)
+            except AttributeError:
+                peft_model.peft_config["default"].save_pretrained(output_dir)
+            
+            torch.save(adapter_state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+
+        else:
+            # Normal pretrained model
+            self.model.save_pretrained(output_dir, state_dict=state_dict)
+
+        # Save tokenizer + training args
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(output_dir)
+
+        torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+        logger.info("✅ Model, tokenizer, and training arguments saved successfully.")

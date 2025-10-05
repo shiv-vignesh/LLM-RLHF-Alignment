@@ -23,3 +23,6 @@ MODEL_CLASSES = {
     "llama": (AutoConfig, LlamaTokenizer, LlamaForCausalLM),
     "auto": (AutoConfig, AutoTokenizer, AutoModelForCausalLM),
 }
+
+WEIGHTS_NAME = "adapter_model.bin"
+TRAINING_ARGS_NAME = "training_args.bin"

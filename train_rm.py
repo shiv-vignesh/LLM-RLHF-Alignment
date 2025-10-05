@@ -1,12 +1,17 @@
 from src.utils.data_preprocessing import AnthrophicRLHFDataset, AnthrophicRLHFDataCollator
-from src.modelling import create_model
+from src.modelling import create_model, load_model_from_ckpt, check_trainable_parameters
 from src.trainer.train_reward_model import create_training_arguments, RewardModelTrainer
 from src.metrics import compute_metrics_for_pair
 
 import os
 
 def main():    
-    model = create_model(model_kwargs, training_kwargs["lora_kwargs"])
+    if model_kwargs["peft_path"] is None:
+        model, _ = create_model(model_kwargs, training_kwargs["lora_kwargs"])        
+    else:
+        model, _ = load_model_from_ckpt(model_kwargs, model_kwargs["peft_path"])
+    
+    check_trainable_parameters(model)
     
     train_dataset = AnthrophicRLHFDataset(
         dataset_kwargs["train_dataset"]["jsonl_path"],
@@ -59,16 +64,20 @@ if __name__ == "__main__":
     training_kwargs = {
         "lora_kwargs":{
             "inference_mode":False,
-            "lora_target":["q_proj","v_proj","k_proj","o_proj"],
-            "lora_rank":128,
-            "lora_alpha":32,
+            # "lora_target":["q_proj","v_proj","k_proj","o_proj"],
+            "lora_target":["q_proj","v_proj","k_proj"],
+            "lora_rank":256,
+            "lora_alpha":128,
             "lora_dropout":0.05,
         },
-        "output_dir":"tmp_trainer",
+        "output_dir":f"OPT-1.3B-helpful-online-qvk-tuned",
         "save_strategy":"steps",
-        "save_steps":10,
+        "save_steps":500,
         "logging_steps":50,
-        "report_to":"tensorboard"
+        "evaluation_strategy": "steps",  # or "epoch"
+        "eval_steps": 2000,  # evaluate every N steps
+        "report_to":"tensorboard",
+        "epochs":10
     }
 
     dataset_kwargs = {
