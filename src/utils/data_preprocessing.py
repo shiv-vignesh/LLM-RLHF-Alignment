@@ -83,6 +83,7 @@ class AnthrophicRLHFDataCollator(object):
         self.tokenizer = tokenizer.from_pretrained(model_name)
         
         self.pad_token_id = self.tokenizer.pad_token_id
+        self.eos_token_id = self.tokenizer.eos_token_id
         
         self.max_prompt_length = max_prompt_length
         self.max_response_length = max_response_length
@@ -107,12 +108,33 @@ class AnthrophicRLHFDataCollator(object):
         encoded_ids += [self.tokenizer.eos_token_id]            
 
         return encoded_ids
-    
-    def preprocess_sample(self, context:str):
+
+    def preprocess_sample(self, context:str, device):
         
-        input_ids = self.tokenizer.encode(text=context, add_special_tokens=False)
+        context = f'{context} {self.tokenizer.bos_token_id}'
+
+        input_ids = self.tokenizer(text=context, return_tensors="pt")["input_ids"]
+        bos = torch.tensor([[self.tokenizer.bos_token_id]])
+        
+        input_ids = torch.cat([input_ids, bos], dim=1)
+
+        attention_mask = torch.ones_like(input_ids).to(input_ids.dtype)
+
+        return {
+            "input_ids":input_ids.to(device), 
+            "attention_mask":attention_mask.to(device)
+        }
+
+    def decode_sample(self, outputs):
+        
+        if len(outputs) > 1:
+            """batch decode"""             
+            return self.tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        
+        else:
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
     
-    def preprocess_inference(self, data_items:Iterable[dict]):
+    def preprocess_inference(self, data_items:Iterable[dict], left_pad_batch:bool=True):
         """
         testing dataset for inference mode to compute BLEU score and ROGUE. 
 
@@ -145,12 +167,21 @@ class AnthrophicRLHFDataCollator(object):
             "rejected_context_ids":[],            
         }
         
+        chosen_max_len = 0 # requried for left pad
+        reject_max_len = 0 # requried for left pad
+        
         for data_item in data_items:
             chosen_context, chosen_response = self.split_dialogue(data_item["chosen"])
             rejected_context, rejected_response = self.split_dialogue(data_item["rejected"])
             
-            chosen_context_ids = self.tokenizer.encode(text=chosen_context, add_special_tokens=False)
-            rejected_context_ids = self.tokenizer.encode(text=rejected_context, add_special_tokens=False)
+            chosen_context_ids = torch.tensor(
+                self.tokenizer.encode(text=chosen_context, add_special_tokens=False),
+                dtype=torch.long
+            )
+            rejected_context_ids = torch.tensor(
+                self.tokenizer.encode(text=rejected_context, add_special_tokens=False),
+                dtype=torch.long
+            )
 
             if len(chosen_context_ids) > self.max_prompt_length - 1:
                 chosen_context_ids = chosen_context_ids[:self.max_prompt_length - 1]
@@ -158,16 +189,50 @@ class AnthrophicRLHFDataCollator(object):
             if len(rejected_context_ids) > self.max_prompt_length - 1:
                 rejected_context_ids = rejected_context_ids[:self.max_prompt_length - 1]
    
+            bos = torch.tensor([self.tokenizer.bos_token_id])
+            chosen_context_ids = torch.cat([chosen_context_ids, bos])
+            rejected_context_ids = torch.cat([rejected_context_ids, bos])
+            
             result["chosen_context_ids"].append(chosen_context_ids)
             result["rejected_context_ids"].append(rejected_context_ids)
             
+            result["chosen_contexts"].append(chosen_context)
+            result["rejected_contexts"].append(rejected_context)
+            
             result["chosen_responses"].append(chosen_response)
             result["rejected_responses"].append(rejected_response)
+            
+            chosen_max_len = max(chosen_max_len, chosen_context_ids.size(0))
+            reject_max_len = max(reject_max_len, rejected_context_ids.size(0))
 
-        result = {k:torch.nn.utils.rnn.pad_sequence(v, batch_first=True, padding_value=self.tokenizer.pad_token_id) for k,v in result.items() if torch.is_tensor(v)}
+        if left_pad_batch:
+            
+            def left_pad_batch(sequences:Iterable[torch.tensor], max_len):                            
+                batch_size = len(sequences)
+                batch = torch.full((batch_size, max_len), self.tokenizer.pad_token_id, 
+                                   dtype=torch.long)
+                
+                for i, s in enumerate(sequences):
+                    l = s.size(0)
+                    # place sequence at right side (left pad)
+                    batch[i, max_len - l : max_len] = s
+
+                return batch
+            
+            result["chosen_context_ids"] = left_pad_batch(result["chosen_context_ids"], chosen_max_len)
+            result["rejected_context_ids"] = left_pad_batch(result["rejected_context_ids"], reject_max_len)
+
+        else:        
+            result["chosen_context_ids"] = torch.nn.utils.rnn.pad_sequence(
+                result["chosen_context_ids"], batch_first=True, padding_value=self.tokenizer.pad_token_id
+            )
+            result["rejected_context_ids"] = torch.nn.utils.rnn.pad_sequence(
+                result["rejected_context_ids"], batch_first=True, padding_value=self.tokenizer.pad_token_id
+            )
+
         result["chosen_attention_mask"] = result["chosen_context_ids"].ne(self.tokenizer.pad_token_id).long()
         result["rejected_attention_mask"] = result["rejected_context_ids"].ne(self.tokenizer.pad_token_id).long()
-        
+
         return result
     
     def __call__(self, data_items:Iterable[dict]):
