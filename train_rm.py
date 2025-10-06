@@ -65,8 +65,8 @@ if __name__ == "__main__":
         "lora_kwargs":{
             "inference_mode":False,
             # "lora_target":["q_proj","v_proj","k_proj","o_proj"],
-            "lora_target":["q_proj","v_proj","k_proj"],
-            "lora_rank":256,
+            "lora_target":["q_proj","v_proj"],
+            "lora_rank":512,
             "lora_alpha":128,
             "lora_dropout":0.05,
         },

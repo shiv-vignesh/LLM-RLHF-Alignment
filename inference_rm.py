@@ -7,6 +7,8 @@ from src.utils.data_preprocessing import AnthrophicRLHFDataset, AnthrophicRLHFDa
 from src.modelling import load_model_from_ckpt
 from src.metrics import compute_generation_metrics
 
+from tqdm import tqdm
+
 def health_check():
     """
     check a sample input to ensure model is not spitting gibberish.
@@ -59,7 +61,7 @@ def main():
     
     results = []
     
-    for batch_idx, data_items in enumerate(dataloader):
+    for batch_idx, data_items in tqdm(enumerate(dataloader)):
         data_items = {
             k: (v.to(device) if torch.is_tensor(v) else v)
             for k, v in data_items.items()
@@ -101,10 +103,11 @@ def main():
             floatfmt=".4f"
         ))
         print(f"\nProcessed batch {batch_idx + 1}/{len(dataloader)}\n")
-
-    # Save all metrics to JSON
-    with open("inference_metrics.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=4, ensure_ascii=False)
+        
+        if (batch_idx + 1) % 10 == 0:
+            # Save all metrics to JSON
+            with open("inference_metrics.json", "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=4, ensure_ascii=False)
 
     # Compute and print overall averages
     avg_bleu = sum(m["bleu"] for m in results) / len(results)
@@ -129,16 +132,16 @@ if __name__ == "__main__":
     
     dataset_kwargs = {
         "data_dir_type":"anthrophic-helpful-online",
-        "jsonl_path":"data/anthrophic_rlhf_dataset/helpful-online/hh_rlhf_train.jsonl",
-        "batch_size":16,
-        "no_multi_turn":True,
-        
-        # "jsonl_path":"data/anthrophic_rlhf_dataset/helpful-online/hh_rlhf_test.jsonl",
+        # "jsonl_path":"data/anthrophic_rlhf_dataset/helpful-online/hh_rlhf_train.jsonl",
         # "batch_size":16,
-        # "no_multi_turn":True
+        # "no_multi_turn":True,
+        
+        "jsonl_path":"data/anthrophic_rlhf_dataset/helpful-online/hh_rlhf_test.jsonl",
+        "batch_size":16,
+        "no_multi_turn":True
     }    
    
-    ckpt_dir = "OPT-1.3B-helpful-online-qvk-tuned/checkpoint-3500"
+    ckpt_dir = "OPT-1.3B-helpful-online-qvk-tuned/checkpoint-5500"
     
     main()
     # health_check()
